@@ -1,6 +1,5 @@
 ---
 - hosts: test
-  remote_user : r09afh
   become: yes
   become_method: sudo
   serial: 2
