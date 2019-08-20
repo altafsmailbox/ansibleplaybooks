@@ -1,0 +1,267 @@
+---
+- hosts: test
+  remote_user : r09afh
+  become: yes
+  become_method: sudo
+#  strategy: free
+  serial: 100
+  tasks:
+  - name : Check info 
+    command: yum list updates
+    register: carriage
+
+
+  - name: Initiating Patching 
+    block: 
+       - name: Collecting precheck data
+         shell: |
+          uptime
+          rpm -qa --last kernel
+          hostname
+          cat /etc/redhat-release
+          uname -r
+          df -Th
+          df -Th | wc -l
+          free -g
+          netstat -rn
+          netstat -nr | wc -l
+          ifconfig -a | grep inet 
+          /usr/sbin/dmidecode -t1
+          cat /etc/fstab
+          yum repolist
+          yum list kernel
+          ps -ef |grep -i /var/cfengine/bin/|grep -v grep
+          sestatus
+          cat /etc/sysconfig/selinux
+          ps -ef | grep -i dsmc | grep -v grep
+          multipath -ll
+         register: prepatch
+         ignore_errors: True
+
+       - name: saving new precheck file
+         local_action: copy content={{ prepatch.stdout }} dest={{ playbook_dir }}/{{ inventory_hostname }}-precheck.txt
+       - name: Validate RHEL6 cluster
+         shell: "/usr/sbin/clustat  | grep Quorate|cut -d' ' -f3"
+         register: clust1
+         ignore_errors: True
+
+       - name: Validate RHEL7 cluster
+         shell: "/usr/sbin/pcs cluster status  | grep Stack|cut -d' ' -f3"
+         register: clust2
+         ignore_errors: True
+
+       - name: Validate RHEL7 cluster's Health
+         shell: "/usr/sbin/pcs  config  |grep interleave | head -1|cut -d' ' -f5"
+         register: clobber
+         ignore_errors: True
+      
+       - name: Collecting node name
+         shell: "/usr/sbin/crm_node -n"
+         register: nod
+         ignore_errors: True
+         when: ansible_distribution_major_version == "7" and clust2.stdout == "corosync"
+  
+       - name: Stopping cluster services
+         shell: |
+          /etc/init.d/rgmanager stop
+          /etc/init.d/gfs2 stop
+          umount -at gfs2
+          /etc/init.d/clvmd stop
+          /etc/init.d/cman stop
+         when: ansible_distribution_major_version == "6" and clust1.stdout == "Quorate"
+
+       - name: troubleshooting RHEL 7 Cluster 
+         shell: |
+          /usr/sbin/pcs resource update fs01-clone meta interleave=true 
+          /usr/sbin/pcs resource update fs02-clone meta interleave=true
+         when: ansible_distribution_major_version == "7" and clust2.stdout == "corosync" and clobber.stdout != "interleave=true"
+
+       - name: Stopping cluster services 
+         shell: |
+          /usr/sbin/pcs cluster standby 
+          /usr/sbin/pcs cluster stop
+          /usr/sbin/pcs cluster disable 
+         when: ansible_distribution_major_version == "7" and clust2.stdout == "corosync" 
+         
+
+       - name: Sanity reboot
+         shell: sleep 10 && /sbin/shutdown -r now
+         async: 300
+         poll: 0
+         become: true
+         ignore_errors: true
+
+       - name: Pause for 180 seconds
+         pause: minutes=2
+
+       - name: wait for the server to restart
+         local_action: wait_for host={{ inventory_hostname }}
+           port=22
+           delay=120
+           timeout=3000
+           state=started
+           connect_timeout=120
+
+       - name: Stopping cluster services
+         shell: |
+          /etc/init.d/rgmanager stop
+          /etc/init.d/gfs2 stop
+          umount -at gfs2
+          /etc/init.d/clvmd stop
+          /etc/init.d/cman stop
+         when: ansible_distribution_major_version == "6" and clust1.stdout == "Quorate"
+
+
+
+
+       - name: Upgrade all Packages
+         yum:
+          update_cache: no
+          name: '*'
+          state: latest
+
+       - name: Final reboot
+         shell: sleep 10 && /sbin/shutdown -r now
+         async: 300
+         poll: 0
+         become: true
+         ignore_errors: true
+
+       - name: Pause for 180 seconds
+         pause: minutes=2
+
+       - name: wait for the server to restart
+         local_action: wait_for host={{ inventory_hostname }}
+           port=22
+           delay=120
+           timeout=3000
+           state=started
+           connect_timeout=120
+       - name: Find the type of Hardaware
+         shell: /usr/sbin/virt-what
+         register: output
+ 
+       - name: Find the Vmware version
+         shell: "rpm -qa | grep vmware-tools-core"
+         register: vers
+         ignore_errors: true
+
+       - name : VMtools install 
+         block: 
+
+         - name: Uninstall old vmtools
+           shell: "/usr/bin/vmware-uninstall-tools.pl"
+           ignore_errors: true
+         
+         - name: Clearing the old files 
+           file: 
+             path= "{{ item }}"
+             state=absent
+           with_items:  
+             -/etc/vmware-tools 
+             -/tmp/vmware-tools-distrib
+             -/usr/lib/vmware-tools
+             -/etc/vmware-caf
+             -/etc/vmware-vgauth
+             -/usr/lib/vmware-caf 
+             -/usr/lib/vmware-vgauth
+         - name: Fetch vmtools
+           copy:
+             src: "/home/r09afh/VMWARE-PACKAGING-GPG-RSA-KEY.pub"
+             dest: "/tmp"
+         - name: Install key
+           shell: "rpm --import /tmp/VMWARE-PACKAGING-GPG-RSA-KEY.pub"
+
+         - name: Install Vmtools
+           shell: "yum install -y vmware-tools-esx{-nox,-kmods} vmware-tools-services"
+           ignore_errors: true
+
+         - name: VM tool install status
+           shell: " ps -ef | grep -i vmware &&  ps -ef  |grep -i vmtool && /etc/vmware-tools/init/vmware-tools-services restart && /etc/vmware-tools/init/vmware-tools-services status && rpm -qa |grep vmware"
+           ignore_errors: true
+           register: output1
+         - debug: 
+            msg: "{{ output1.stdout_lines }}"
+
+
+         when: ansible_distribution_major_version == "6" and output.stdout == "vmware" and vers.stdout != "vmware-tools-core-10.3.5-1.el6.x86_64"
+
+
+       - name: Starting cluster services
+         shell: |
+          /etc/init.d/cman start
+          /etc/init.d/clvmd start
+          /etc/init.d/gfs2 start
+          /etc/init.d/rgmanager start
+         when: ansible_distribution_major_version == "6" and clust1.stdout == "Quorate"
+
+       - name: Starting cluster services
+         shell: |
+          /usr/sbin/pcs cluster start {{ nod.stdout }}
+          /usr/sbin/pcs cluster enable {{ nod.stdout }}
+          /usr/sbin/pcs cluster unstandby {{ nod.stdout }}
+         when: ansible_distribution_major_version == "7" and clust2.stdout == "corosync"
+
+    when: carriage.stdout_lines | length  > 2
+ 
+
+  - name: Collecting postcheck data 
+    block:
+      - name: initiating postcheck
+        shell: | 
+         uptime
+         rpm -qa --last kernel
+         hostname 
+         cat /etc/redhat-release 
+         uname -r 
+         mount -a
+         df -Th 
+         df -Th | wc -l 
+         free -g 
+         netstat -rn 
+         netstat -nr | wc -l 
+         ifconfig -a | grep inet 
+         /usr/sbin/dmidecode -t1 
+         cat /etc/fstab 
+         yum repolist 
+         yum list kernel 
+         ps -ef |grep -i /var/cfengine/bin/|grep -v grep 
+         sestatus 
+         cat /etc/sysconfig/selinux 
+         /opt/tivoli/tsm/client/ba/bin/dsmcad
+         ps -ef | grep -i dsmc | grep -v grep 
+         multipath -ll 
+        register: postcheck 
+        ignore_errors: True 
+
+      - name: saving new postcheck file 
+        local_action: copy content={{ postcheck.stdout }} dest={{ playbook_dir }}/{{ inventory_hostname }}-postcheck.txt 
+
+      - name: Comparing result
+        command: diff {{ playbook_dir }}/{{ inventory_hostname }}-postcheck.txt {{ playbook_dir }}/{{ inventory_hostname }}-precheck.txt 
+        delegate_to: localhost
+        register: diff
+        ignore_errors: yes
+    
+      - name: Final result
+        local_action: copy content={{ diff.stdout }} dest={{ playbook_dir }}/{{ inventory_hostname }}-final.txt
+
+
+      - name: Pulling Lssefix report
+        shell: "./AG_lssecfixes_wrapper.pl"   
+        args:
+          chdir: /root/scripts/lssecfixes
+        register: lsef
+      
+      - name: Saving Lsefix report localy 
+        local_action: copy content={{ lsef.stdout }} dest={{ playbook_dir }}/lsefixreport/{{ inventory_hostname }}-lsefix_report.txt
+      - name: Pulling Lssefix report
+        shell: "./AG_lssecfixes_wrapper.pl -m"
+        args:
+          chdir: /root/scripts/lssecfixes
+        register: lsef1
+      
+      - name: Saving Lsefix report localy 
+        local_action: copy content={{ lsef1.stdout }} dest={{ playbook_dir }}/lsefixreport/{{ inventory_hostname }}-lsefix_report_missing.txt
+
+        when: carriage.stdout_lines | length  > 2 
