@@ -1,0 +1,20 @@
+---
+- hosts: test
+  remote_user : r09afh
+  become: yes
+  become_method: sudo
+  serial: 2
+  gather_facts: no
+  tasks:
+    - name: Archive logs list on client
+      command: " /usr/sbin/logrotate -f /etc/logrotate.conf"
+      ignore_errors: true
+
+    - name : compress logs
+      command: "tar -cvf /tmp/decomlogs.tar.gz /var/log/ --exclude=lastlog"
+
+    - name: copy data to local server 
+      fetch:
+        src: "/tmp/decomlogs.tar.gz"
+        dest: "/data/decom_server_logs/{{ inventory_hostname }}.tar.gz"
+        flat: yes
