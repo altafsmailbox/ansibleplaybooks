@@ -1,0 +1,15 @@
+---
+- hosts: test
+  become: yes
+  become_method: sudo
+  tasks:
+  - name: Ansible copy files to  remote server
+    copy:
+      src: "{{ item }}"
+      mode: 755
+      dest: /opt/dest/folder
+      with_items: 
+        - /home/user/script.sh
+        - /home/user1/script.sh
+        - /home/user2/script.sh
+      become: yes
