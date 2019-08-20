@@ -1,6 +1,5 @@
 ---
 - hosts: test
-  remote_user : r09afh
   become: yes
   become_method: sudo
 #  strategy: free
@@ -167,7 +166,7 @@
              -/usr/lib/vmware-vgauth
          - name: Fetch vmtools
            copy:
-             src: "/home/r09afh/VMWARE-PACKAGING-GPG-RSA-KEY.pub"
+             src: "/home/user/VMWARE-PACKAGING-GPG-RSA-KEY.pub"
              dest: "/tmp"
          - name: Install key
            shell: "rpm --import /tmp/VMWARE-PACKAGING-GPG-RSA-KEY.pub"
