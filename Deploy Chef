@@ -1,0 +1,71 @@
+---
+- hosts: test
+  become: yes
+  become_method: sudo  
+  vars:
+    vgname: vg2
+
+  gather_facts: true
+  tasks:
+  - name: Set chefsolo authorized key took from file
+    authorized_key:
+      user: chefsolo
+      state: present
+      exclusive:  yes
+      key: "{{ lookup('file', '/home/user/Jenkins_Public_key.txt') }}"
+
+  - name: Check for Vg name 
+    shell : "/sbin/vgs | grep macysdd| cut -d' ' -f3"
+    register: vgnamestat
+  - debug: var=vgnamestat
+
+  - set_fact:
+      vgname: vg1
+    when: vgnamestat.stdout == ""
+  
+   
+  - name: Create Logical Volume 
+    lvol:
+      vg: "{{ vgname }}"
+      lv: var_cheflv
+      size: 5g
+      
+   
+  - name: Create file system for rhel 6
+    filesystem:
+      fstype: ext4
+      dev: /dev/{{ vgname }}/var_cheflv
+    when: ansible_distribution_major_version == "6"
+ 
+  - name: Mount File system  for rhel 6
+    mount: 
+      name: /var/chef
+      src: /dev/{{ vgname }}/var_cheflv
+      fstype: ext4
+      state: mounted
+    when: ansible_distribution_major_version == "6"
+
+  - name: Create file system  for rhel 7
+    filesystem:
+      fstype: xfs
+      dev: /dev/{{ vgname }}/var_cheflv
+    when: ansible_distribution_major_version == "7"
+
+  - name: Mount File system  for rhel 7
+    mount:
+      name: /var/chef
+      src: /dev/{{ vgname }}/var_cheflv
+      fstype: xfs
+      state: mounted
+    when: ansible_distribution_major_version == "7"
+
+
+  - name: Push Chef package 
+    copy:
+      src: /home/user/chef-12.5.1-1.el7.x86_64.rpm
+      dest: /home/user1/
+
+  - name: Install Chef 
+    yum:
+      name: /home/user/chef-12.5.1-1.el7.x86_64.rpm
+      state: present
