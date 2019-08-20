@@ -1,0 +1,36 @@
+---
+- hosts: test
+  become: yes
+  become_method: sudo
+  vars:
+    proxy_env:
+      http_proxy: http://192.168.10.12:3128
+  tasks: 
+
+  - name: Set up channel
+    shell: "wget -q -O - http://linux.dell.com/repo/hardware/dsu/bootstrap.cgi | bash"
+    environment: "{{proxy_env}}"   
+ 
+  - name: Install DSU
+    yum:
+     name: dell-system-update
+     state: latest
+    environment: "{{proxy_env}}"
+  
+  - name: Upgrading firmware
+    shell: "/usr/sbin/dsu --non-interactive"
+    ignore_errors: True
+    environment: "{{proxy_env}}"
+
+  - include_role: 
+      name: reboot
+  
+  - name: Verify updates
+    shell: "/usr/sbin/dsu --apply-upgrades-only"
+    ignore_errors: True
+    environment: "{{proxy_env}}"
+    register: var
+
+
+  - debug: 
+     msg: "{{ var.stdout_lines }}"
