@@ -1,0 +1,137 @@
+---
+- gather_facts: False
+  name: Sunset
+  hosts: sunset1 
+  tasks:
+    - name: clean up job queue
+      raw: racadm jobqueue delete -i JID_CLEARALL_FORCE
+
+    - name: reboot server
+      raw: racadm serveraction powerdown
+   
+
+    - name: Check for Virtual disk (RAID config)
+      raw: racadm storage get vdisks -o
+      register: vdisk
+    - name: Delete the Virtual Disk
+      raw: racadm storage deletevd:Disk.Virtual.0:RAID.Integrated.1-1
+      when: "'Disk.Virtual.0:RAID.Integrated.1-1' in vdisk.stdout"
+      register: vdisk1
+    - debug: var=vdisk1
+
+    - name: Create a job for Delete Vdisk
+      raw: racadm jobqueue create RAID.Integrated.1-1
+      register: job1
+      failed_when: "'Unable' in job1.stdout or 'Pending' in job1.stdout or 'ERROR' in job1.stdout"
+    - debug: var=job1
+
+    - name: Reboot Blade for the config changes to take effect
+      raw: racadm serveraction hardreset
+    
+    - name: Monitor Job for successfull completion
+      raw: racadm jobqueue view
+      register : job_stat
+      until: job_stat.stdout.find("Status=Completed") != -1 and job_stat.stdout.find("Status=Running") == -1 and job_stat.stdout.find("Status=Scheduled") == -1
+      retries: 100
+      delay: 10
+    - debug: var=job_stat
+
+
+    - name: Reset controller config 
+      raw: racadm storage resetconfig:RAID.Integrated.1-1
+      register: control_config
+      failed_when: "'Unable' in control_config.stdout or 'Pending' in control_config.stdout" 
+    - debug: var=control_config
+
+    - name: Create new Job
+      raw: racadm jobqueue create RAID.Integrated.1-1
+      register: jq
+      failed_when: "'Unable' in jq.stdout or 'Pending' in jq.stdout or 'ERROR' in jq.stdout"
+    - debug: var=jq
+
+    - name: Reboot Blade for the config changes to take effect
+      raw: racadm serveraction hardreset
+    
+    - name: Monitor Job for controller
+      raw: racadm jobqueue view
+      register : job_stat1
+      until: job_stat1.stdout.find("Status=Completed") != -1 and job_stat1.stdout.find("Status=Running") == -1 and job_stat1.stdout.find("Status=Scheduled") == -1
+      retries: 100
+      delay: 10
+      failed_when: " '' in job_stat1"
+    - debug: var=job_stat1
+
+
+    - name:  Create new RAID Config
+      raw: racadm storage createvd:RAID.Integrated.1-1 -rl r0 -name raid_0 -pdkey:Disk.Bay.0:Enclosure.Internal.0-1:RAID.Integrated.1-1,Disk.Bay.1:Enclosure.Internal.0-1:RAID.Integrated.1-1
+      register: new_vdisk
+      failed_when: "'Unable' in new_vdisk.stdout or 'Pending' in new_vdisk.stdout or 'ERROR' in new_vdisk.stdout" 
+    - debug: var=new_vdisk
+
+    - name: Create new Job for RAID Config Creation
+      raw: racadm jobqueue create RAID.Integrated.1-1
+      register: jc
+      failed_when: "'Unable' in jc.stdout or 'Pending' in jc.stdout or 'ERROR' in jc.stdout"
+
+    - name: Reboot Blade for the config changes to take effect
+      raw: racadm serveraction hardreset
+
+
+    - name: Monitor Job for RAID Config
+      raw: racadm jobqueue view
+      register : job_stat2
+      until:  job_stat2.stdout.find("Status=Completed") != -1 and job_stat2.stdout.find("Status=Running") == -1  and job_stat2.stdout.find("Status=Scheduled") == -1
+      retries: 100
+      delay: 10
+
+
+    
+    - name: Initialise the RAID Disk
+      raw: racadm storage init:Disk.Virtual.0:RAID.Integrated.1-1 -speed fast
+      register: init_disk
+      failed_when: "'Unable' in init_disk.stdout or 'Pending' in init_disk.stdout or 'ERROR' in init_disk.stdout" 
+    - debug: var=init_disk
+
+    - name: Create new Job for RAID Config Creation
+      raw: racadm jobqueue create RAID.Integrated.1-1
+      register: jc1
+      failed_when: "'Unable' in jc1.stdout or 'Pending' in jc1.stdout or 'ERROR' in jc1.stdout"
+
+    - name: Reboot Blade for the config changes to take effect
+      raw: racadm serveraction hardreset
+
+    - name: Monitor Job for RAID Init status 
+      raw: racadm jobqueue view
+      register : job_stat3
+      until:  job_stat3.stdout.find("Status=Completed") != -1 and job_stat3.stdout.find("Status=Running") == -1  and job_stat3.stdout.find("Status=Scheduled") == -1
+      retries: 100
+      delay: 10
+
+    - name: unmap all attachments
+      raw: racadm remoteimage -d
+      register: unmap
+    - debug: var=unmap
+
+    - name: Map ISO
+      raw: racadm remoteimage -c -u user -p 123456@ -l "172.29.0.1:/install/sdd_auto_DoD.iso"
+      register: result_map
+      failed_when: "'ERROR' in result_map.stdout or 'COMMAND PROCESSING FAILED' in result_map.stdout or 'error' in result_map.stdout "
+    - debug: var=result_map
+
+    - name: set the next boot to use alternate device only once 
+      raw: racadm config -g cfgServerInfo -o cfgServerBootOnce 1
+      register: result_fboot
+      failed_when: "'ERROR' in result_fboot.stdout or 'COMMAND PROCESSING FAILED' in result_fboot.stdout or 'error' in result_fboot.stdout"
+    - debug: var=result_fboot
+
+    - name: set the next boot device to be the virtual cd
+      raw: racadm config -g cfgServerInfo -o cfgServerFirstBootDevice VCD-DVD
+      register: result_nxtboot
+      failed_when: "'ERROR' in result_nxtboot.stdout or 'COMMAND PROCESSING FAILED' in result_nxtboot.stdout or 'error' in result_nxtboot.stdout"
+    - debug: var=result_nxtboot
+
+    - name: reboot the underlying system
+      raw: racadm serveraction powercycle
+      register: result_power
+      failed_when: "'ERROR' in result_power.stdout or 'COMMAND PROCESSING FAILED' in result_power.stdout or 'error' in result_power.stdout"
+    - debug: var=result_power
